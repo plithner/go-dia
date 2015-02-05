@@ -35,6 +35,11 @@ const (
 	ProductName = format.UTF8String("go-diameter")
 )
 
+// signaling data structure
+type Sig struct {
+	Code string // Code of this message (i.e CER, DWR or CCR)
+}
+
 func main() {
 	ssl := flag.Bool("ssl", false, "connect using SSL/TLS")
 	flag.Parse()
@@ -98,8 +103,8 @@ func ClientListen(cnnl chan string) {
 // fan-in (multiplexing function) for the signaing channels
 // takes the input from all the channels, and multiplexes it into one
 // to enable unblocked reception of data on that channel
-func FanIn(CerChannel, DwrChannel, CcrChannel <-chan string) <-chan string {
-	channel := make(chan string)
+func FanIn(CerChannel, DwrChannel, CcrChannel <-chan Sig) <-chan Sig {
+	channel := make(chan Sig)
 	go func() {
 		for {
 			channel <- <-CerChannel
@@ -123,8 +128,12 @@ func FanIn(CerChannel, DwrChannel, CcrChannel <-chan string) <-chan string {
 // and initiates a debit on their accounts
 // It is a simple go routine that lives forever, and sends a service
 // request now and then
-func GenerateServiceRequest() <-chan string { // returns a receive only channel of string
-	channel := make(chan string)
+func GenerateServiceRequest() <-chan Sig { // returns a receive only channel of string
+	channel := make(chan Sig)
+	infoElem := Sig{
+		Code: "CCR",
+	}
+
 	go func() {
 		// Send CCR  every x*rand seconds
 		for {
@@ -133,41 +142,51 @@ func GenerateServiceRequest() <-chan string { // returns a receive only channel 
 			sleeptime := time.Second * amt
 			log.Printf("Sleeptime: %s", sleeptime)
 			time.Sleep(sleeptime)
-			channel <- "CCR"
+			channel <- infoElem
 		}
 	}()
 	return channel
 }
 
 // lives forever and sends DWR message at a fixed interval
-func Watchdog() <-chan string { // returns a receive only channel of string
-	channel := make(chan string)
+func Watchdog() <-chan Sig { // returns a receive only channel of string
+	channel := make(chan Sig)
+
+	infoElem := Sig{
+		Code: "DWR",
+	}
+
 	// Send watchdog messages every x seconds
 	go func() {
 		for {
 			time.Sleep(10 * time.Second)
-			channel <- "DWR"
+			channel <- infoElem
 		}
 	}()
 	return channel
 }
 
-func CapabilityRequestStub() <-chan string { // returns a receive only channel of string
+func CapabilityRequestStub() <-chan Sig { // returns a receive only channel of string
 	// Send CER
-	channel := make(chan string)
+	channel := make(chan Sig)
+
+	infoElem := Sig{
+		Code: "CER",
+	}
+
 	go func() {
-		channel <- "CER"
+		channel <- infoElem
 	}()
 	return channel
 }
 
-func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan string) {
-	// Listen forver on the diaChannel for requests to send messages to server
+func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan Sig) {
+	// Listen forver on the SigChannel for requests to send messages to server
 	for {
 		msg := <-SigChannel //get whatever is on the channel
 		log.Printf("Internal message received: %s", msg)
 
-		if msg == "CCR" {
+		if msg.Code == "CCR" {
 			log.Printf("CCR going out")
 			// Craft a CCR message.
 			r := diam.NewRequest(diam.CreditControl, 4, nil)
@@ -185,7 +204,7 @@ func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan string) {
 			}
 		}
 
-		if msg == "DWR" {
+		if msg.Code == "DWR" {
 			log.Printf("TODO: Send DWR")
 			/*
 				d = diam.NewRequest(diam.DeviceWatchdogRequest, 0, nil)
@@ -200,7 +219,7 @@ func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan string) {
 			*/
 		}
 
-		if msg == "CER" {
+		if msg.Code == "CER" {
 			log.Printf("CER for you Sir")
 			// Create and send CER
 			m := diam.NewRequest(diam.CapabilitiesExchange, 0, nil)
