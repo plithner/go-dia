@@ -22,6 +22,7 @@ const (
 	AuthRequestType               = 274
 	AuthSessionState              = 277
 	AuthorizationLifetime         = 291
+	CalledStationId               = 30
 	CCCorrelationId               = 411
 	CCInputOctets                 = 412
 	CCMoney                       = 413
