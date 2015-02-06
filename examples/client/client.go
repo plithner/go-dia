@@ -138,7 +138,7 @@ func GenerateServiceRequest() <-chan Sig { // returns a receive only channel of 
 	channel := make(chan Sig)
 
 	go func() {
-		time.Sleep(5 * time.Second)
+		time.Sleep(2 * time.Second) //wait a while before starting
 		Identity := 0
 		//msisdn := rand.Int()
 
@@ -156,7 +156,7 @@ func GenerateServiceRequest() <-chan Sig { // returns a receive only channel of 
 				Identity: Identity,
 			}
 
-			sleeptime := time.Second * time.Duration(rand.Intn(25))
+			sleeptime := time.Second * time.Duration(rand.Intn(10))
 			log.Printf("Time until next CCR: %s", sleeptime)
 			time.Sleep(sleeptime)
 			channel <- infoElem
@@ -207,6 +207,7 @@ func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan Sig) {
 			// Craft a CCR message.
 			r := diam.NewRequest(diam.CreditControl, 4, nil)
 			r.NewAVP(avp.SessionId, avp.Mbit, 0, format.UTF8String("fake-session"))
+			r.NewAVP(avp.ServiceContextId, avp.Mbit, 0, format.UTF8String("9.32251@3gpp.org"))
 			r.NewAVP(avp.OriginHost, avp.Mbit, 0, Identity)
 			r.NewAVP(avp.OriginRealm, avp.Mbit, 0, Realm)
 			r.NewAVP(avp.DestinationRealm, avp.Mbit, 0, Realm)
@@ -222,6 +223,8 @@ func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan Sig) {
 					diam.NewAVP(avp.SubscriptionIdData, avp.Mbit, 0, format.UTF8String("12345678")),
 				},
 			})
+
+			r.NewAVP(avp.CalledStationId, avp.Mbit, 0, format.UTF8String("apn.telenor.com"))
 
 			// Add Service-Context-Id and all other AVPs..
 			//r.WriteTo(c)
@@ -260,7 +263,7 @@ func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan Sig) {
 			laddr := c.LocalAddr()
 			ip, _, _ := net.SplitHostPort(laddr.String())
 			m.NewAVP(avp.HostIPAddress, avp.Mbit, 0, format.Address(net.ParseIP(ip)))
-			m.NewAVP(avp.VendorId, avp.Mbit, 0, VendorId)
+			m.NewAVP(avp.VendorId, avp.Mbit, 0, format.Unsigned32(10415))
 			m.NewAVP(avp.ProductName, avp.Mbit, 0, ProductName)
 
 			m.NewAVP(avp.OriginStateId, avp.Mbit, 0, format.Unsigned32(rand.Uint32()))
