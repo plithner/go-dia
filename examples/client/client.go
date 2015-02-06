@@ -37,7 +37,9 @@ const (
 
 // signaling data structure
 type Sig struct {
-	Code string // Code of this message (i.e CER, DWR or CCR)
+	Code     string // Code of this message (i.e CER, DWR or CCR)
+	msisdn   int
+	Identity int // unique identifier (needed here... hmmm?)
 }
 
 func main() {
@@ -123,6 +125,10 @@ func FanIn(CerChannel, DwrChannel, CcrChannel <-chan Sig) <-chan Sig {
 	return channel
 }
 
+func random(min, max int) int {
+	return rand.Intn(max-min) + min
+}
+
 // This is a test-stub, that attempts to mimic the system that
 // receives service requests from subscribers (end-users (people))
 // and initiates a debit on their accounts
@@ -130,17 +136,28 @@ func FanIn(CerChannel, DwrChannel, CcrChannel <-chan Sig) <-chan Sig {
 // request now and then
 func GenerateServiceRequest() <-chan Sig { // returns a receive only channel of string
 	channel := make(chan Sig)
-	infoElem := Sig{
-		Code: "CCR",
-	}
 
 	go func() {
+		time.Sleep(5 * time.Second)
+		Identity := 0
+		//msisdn := rand.Int()
+
 		// Send CCR  every x*rand seconds
 		for {
-			amt := time.Duration(rand.Intn(25))
-			log.Printf("amt: %s", amt)
-			sleeptime := time.Second * amt
-			log.Printf("Sleeptime: %s", sleeptime)
+			// create random fake MSISDN
+			msisdn := random(1000000, 4999999)
+			msisdn = msisdn + 46702000000
+
+			Identity = Identity + 1
+
+			infoElem := Sig{
+				Code:     "CCR",
+				msisdn:   msisdn,
+				Identity: Identity,
+			}
+
+			sleeptime := time.Second * time.Duration(rand.Intn(25))
+			log.Printf("Time until next CCR: %s", sleeptime)
 			time.Sleep(sleeptime)
 			channel <- infoElem
 		}
@@ -152,14 +169,14 @@ func GenerateServiceRequest() <-chan Sig { // returns a receive only channel of 
 func Watchdog() <-chan Sig { // returns a receive only channel of string
 	channel := make(chan Sig)
 
-	infoElem := Sig{
-		Code: "DWR",
-	}
-
 	// Send watchdog messages every x seconds
 	go func() {
 		for {
 			time.Sleep(10 * time.Second)
+			infoElem := Sig{
+				Code: "DWR",
+			}
+
 			channel <- infoElem
 		}
 	}()
@@ -170,11 +187,10 @@ func CapabilityRequestStub() <-chan Sig { // returns a receive only channel of s
 	// Send CER
 	channel := make(chan Sig)
 
-	infoElem := Sig{
-		Code: "CER",
-	}
-
 	go func() {
+		infoElem := Sig{
+			Code: "CER",
+		}
 		channel <- infoElem
 	}()
 	return channel
@@ -184,20 +200,32 @@ func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan Sig) {
 	// Listen forver on the SigChannel for requests to send messages to server
 	for {
 		msg := <-SigChannel //get whatever is on the channel
-		log.Printf("Internal message received: %s", msg)
 
 		if msg.Code == "CCR" {
-			log.Printf("CCR going out")
+			log.Printf("Internal message received: %s for %d with ID: %d", msg.Code, msg.msisdn, msg.Identity)
+
 			// Craft a CCR message.
 			r := diam.NewRequest(diam.CreditControl, 4, nil)
 			r.NewAVP(avp.SessionId, avp.Mbit, 0, format.UTF8String("fake-session"))
 			r.NewAVP(avp.OriginHost, avp.Mbit, 0, Identity)
 			r.NewAVP(avp.OriginRealm, avp.Mbit, 0, Realm)
+			r.NewAVP(avp.DestinationRealm, avp.Mbit, 0, Realm)
 			//peerRealm, _ := m.FindAVP(avp.OriginRealm) // You should handle errors.
 			//r.NewAVP(avp.DestinationRealm, avp.Mbit, 0, peerRealm.Data)
 			r.NewAVP(avp.AuthApplicationId, avp.Mbit, 0, format.Unsigned32(4))
-			// Add Service-Context-Id and all other AVPs...
+			r.NewAVP(avp.CCRequestType, avp.Mbit, 0, format.UTF8String("INITIAL_REQUEST"))
+			r.NewAVP(avp.CCRequestNumber, avp.Mbit, 0, format.Unsigned32(1))
+
+			r.NewAVP(avp.SubscriptionId, avp.Mbit, 0, &diam.GroupedAVP{
+				AVP: []*diam.AVP{
+					diam.NewAVP(avp.SubscriptionIdType, avp.Mbit, 0, format.Enumerated(0)),
+					diam.NewAVP(avp.SubscriptionIdData, avp.Mbit, 0, format.UTF8String("12345678")),
+				},
+			})
+
+			// Add Service-Context-Id and all other AVPs..
 			//r.WriteTo(c)
+			log.Printf("Sending CCR message to %s", c.RemoteAddr().String())
 			// Send message to the connection
 			if _, err := r.WriteTo(c); err != nil {
 				log.Fatal("Write failed:", err)
@@ -207,6 +235,8 @@ func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan Sig) {
 		if msg.Code == "DWR" {
 			log.Printf("TODO: Send DWR")
 			/*
+				log.Printf("Internal message received: %s for %d with ID: %d", msg.Code, msg.msisdn, msg.Identity)
+
 				d = diam.NewRequest(diam.DeviceWatchdogRequest, 0, nil)
 				d.NewAVP(avp.OriginHost, avp.Mbit, 0, Identity)
 				d.NewAVP(avp.OriginRealm, avp.Mbit, 0, Realm)
@@ -220,11 +250,13 @@ func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan Sig) {
 		}
 
 		if msg.Code == "CER" {
-			log.Printf("CER for you Sir")
+			log.Printf("Internal message received: %s", msg.Code)
+
 			// Create and send CER
 			m := diam.NewRequest(diam.CapabilitiesExchange, 0, nil)
 			m.NewAVP(avp.OriginHost, avp.Mbit, 0, Identity)
 			m.NewAVP(avp.OriginRealm, avp.Mbit, 0, Realm)
+			m.NewAVP(avp.DestinationRealm, avp.Mbit, 0, Realm)
 			laddr := c.LocalAddr()
 			ip, _, _ := net.SplitHostPort(laddr.String())
 			m.NewAVP(avp.HostIPAddress, avp.Mbit, 0, format.Address(net.ParseIP(ip)))
@@ -238,8 +270,8 @@ func ComposeAndSendDiameterMessage(c diam.Conn, SigChannel <-chan Sig) {
 					diam.NewAVP(avp.VendorId, avp.Mbit, 0, format.Unsigned32(10415)),
 				},
 			})
-			log.Printf("Sending message to %s", c.RemoteAddr().String())
-			log.Println(m)
+			log.Printf("Sending CER message to %s", c.RemoteAddr().String())
+			//log.Println(m)
 			// Send message to the connection
 			if _, err := m.WriteTo(c); err != nil {
 				log.Fatal("Write failed:", err)
@@ -267,7 +299,8 @@ func OnCEA(c diam.Conn, m *diam.Message) {
 
 // OnCCA handles Credit-Control-Answer messages.
 func OnCCA(c diam.Conn, m *diam.Message) {
-	log.Println(m)
+	//log.Println(m)
+	log.Println("CCA Received")
 	// TODO: Communicate back to the sender, that a CCA has been received
 	// and the status.
 }
@@ -275,5 +308,5 @@ func OnCCA(c diam.Conn, m *diam.Message) {
 // OnMSG handles all other messages and just print them.
 func OnMSG(c diam.Conn, m *diam.Message) {
 	log.Printf("Receiving message from %s", c.RemoteAddr().String())
-	log.Println(m)
+	//log.Println(m)
 }
